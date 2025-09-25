@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # необходимо для генерации changelog
 
       - name: Setup Dart
         uses: dart-lang/setup-dart@v1
@@ -30,7 +32,11 @@ jobs:
       - name: Build executable
         run: dart compile exe ./bin/launcher_bootstrap.dart -o ./${{ matrix.artifact_name }}
 
-      - name: Upload artifact (temporary storage)
+      - name: Make executable (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: chmod +x ./${{ matrix.artifact_name }}
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -39,18 +45,46 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # необходимо для создания релиза
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get commit short SHA
+        id: get_commit
+        run: echo "commit_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Найти последний тег релиза (если есть)
+          if git fetch --tags --quiet 2>/dev/null && \
+             latest_tag=$(git describe --tags --abbrev=0 2>/dev/null); then
+            echo "from_tag=$latest_tag" >> $GITHUB_OUTPUT
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            git log "$latest_tag..HEAD" --oneline --no-merges >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "from_tag=beginning" >> $GITHUB_OUTPUT
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            git log --oneline --no-merges >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
 
-      - name: Flatten artifacts directory (optional, for cleaner paths)
+      - name: Flatten artifacts
         run: |
           mkdir -p release_files
           find ./artifacts -type f -exec mv {} ./release_files/ \;
 
-      - name: List files for verification
+      - name: List release files
         run: ls -la ./release_files
 
       - name: Create GitHub Release
@@ -58,5 +92,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          name: "branch build ${{ steps.get_commit.outputs.commit_short }}"
+          tag_name: "build-${{ steps.get_commit.outputs.commit_short }}"
+          body: |
+            This is an automatic build of commit ${{ steps.get_commit.outputs.commit_short }}
+
+            **Changes since ${{ steps.changelog.outputs.from_tag }}:**
+            ```
+            ${{ steps.changelog.outputs.changelog }}
+            ```
           draft: true
           files: ./release_files/*
