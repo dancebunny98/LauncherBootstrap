@@ -4,7 +4,7 @@ import 'package:launcher_bootstrap/storage_manager.dart';
 
 class LauncherStarter {
   static startLauncher() async {
-    print('Starting launcher...');
+    print('Starting launcher');
 
     await Process.start(
         await _resolveJavaExecutablePath(), ['-jar', 'launcher.jar'],
